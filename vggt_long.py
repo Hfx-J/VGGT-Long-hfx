@@ -780,6 +780,11 @@ def copy_file(src_path, dst_dir):
     except Exception as e:
         print(f"Copy Error: {e}")
 
+"""
+学习一下如何长序列
+"""
+
+
 if __name__ == '__main__':
 
     parser = argparse.ArgumentParser(description='VGGT-Long')
