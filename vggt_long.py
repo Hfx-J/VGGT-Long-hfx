@@ -79,7 +79,7 @@ class VGGT_Long:
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         self.dtype = torch.bfloat16 if torch.cuda.get_device_capability()[0] >= 8 else torch.float16
         self.sky_mask = False
-        self.useDBoW = self.config['Model']['useDBoW']
+        self.useDBoW = self.config['Model']['useDBoW'] # Todo hfx:实际上回环，但是据其所说 只能跑在C++上，可以优化
 
         self.img_dir = image_dir
         self.img_list = None
@@ -107,6 +107,11 @@ class VGGT_Long:
 
         print('Loading model...')
 
+        """
+        Todo hfx:
+        如果将VGGT等价换为其他的重建模型是否可以？
+        此外能否引入imu作为位姿约束？
+        """
         self.model = VGGT()
         # _URL = "https://huggingface.co/facebook/VGGT-1B/resolve/main/model.pt"
         # model.load_state_dict(torch.hub.load_state_dict_from_url(_URL))
@@ -132,6 +137,10 @@ class VGGT_Long:
 
         self.loop_list = [] # e.g. [(1584, 139), ...]
 
+        """
+        Todo hfx:
+        可以在里面学习一下其是如何来优化整个系统的，实际上这难道不是一个后端系统吗？
+        """
         self.loop_optimizer = Sim3LoopOptimizer(self.config)
 
         self.sim3_list = [] # [(s [1,], R [3,3], T [3,]), ...]
@@ -181,7 +190,10 @@ class VGGT_Long:
         else: # DNIO v2
             self.loop_detector.run()
             self.loop_list = self.loop_detector.get_loop_list()
-
+    """
+    Todo hfx: 
+    对单一分块进行处理
+    """
     def process_single_chunk(self, range_1, chunk_idx=None, range_2=None, is_loop=False):
         start_idx, end_idx = range_1
         chunk_image_paths = self.img_list[start_idx:end_idx]
@@ -246,6 +258,7 @@ class VGGT_Long:
             torch.cuda.empty_cache()
 
         print("Converting pose encoding to extrinsic and intrinsic matrices...")
+        # 从VGGT的预测中提取内外参
         extrinsic, intrinsic = pose_encoding_to_extri_intri(predictions["pose_enc"], images.shape[-2:])
         predictions["extrinsic"] = extrinsic
         predictions["intrinsic"] = intrinsic
@@ -254,7 +267,8 @@ class VGGT_Long:
             if isinstance(predictions[key], torch.Tensor):
                 predictions[key] = predictions[key].cpu().numpy().squeeze(0)
         
-        if self.temp_files_location == 'cpu_memory':
+        # 根据存储位置设置，将模型预测结果保存到内存或磁盘。
+        if self.temp_files_location == 'cpu_memory': 
             if is_loop:
                 key = f"loop_{range_1[0]}_{range_1[1]}_{range_2[0]}_{range_2[1]}"
             else:
@@ -303,18 +317,24 @@ class VGGT_Long:
             np.save(save_path, predictions)
             
             return predictions if is_loop or range_2 is not None else None
-    
+    """
+    Todo hfx:
+    查看一下是如何优化的，分块和重叠。
+    """
     def process_long_sequence(self):
+        # 重叠的数量在config中似乎是chunk_size的一半？
         if self.overlap >= self.chunk_size:
             raise ValueError(f"[SETTING ERROR] Overlap ({self.overlap}) must be less than chunk size ({self.chunk_size})")
+        
+        #若img_list长度小于分块尺寸就没必要分块了（实际上小于60帧也不算是long sequence）
         if len(self.img_list) <= self.chunk_size:
             num_chunks = 1
             self.chunk_indices = [(0, len(self.img_list))]
         else:
-            step = self.chunk_size - self.overlap
-            num_chunks = (len(self.img_list) - self.overlap + step - 1) // step
+            step = self.chunk_size - self.overlap #更新step只需要往后更新一半就可，保留重叠部分
+            num_chunks = (len(self.img_list) - self.overlap + step - 1) # 计算分块数量
             self.chunk_indices = []
-            for i in range(num_chunks):
+            for i in range(num_chunks): # 把不同分块索引加入列表
                 start_idx = i * step
                 end_idx = min(start_idx + self.chunk_size, len(self.img_list))
                 self.chunk_indices.append((start_idx, end_idx))
@@ -336,6 +356,7 @@ class VGGT_Long:
 
         print(f"Processing {len(self.img_list)} images in {num_chunks} chunks of size {self.chunk_size} with {self.overlap} overlap")
 
+        # 处理 每个分块的部分
         for chunk_idx in range(len(self.chunk_indices)):
             print(f'[Progress]: {chunk_idx}/{len(self.chunk_indices)}')
             self.process_single_chunk(self.chunk_indices[chunk_idx], chunk_idx=chunk_idx)
@@ -356,11 +377,13 @@ class VGGT_Long:
                 chunk_data1 = np.load(os.path.join(self.result_unaligned_dir, f"chunk_{chunk_idx}.npy"), allow_pickle=True).item()
                 chunk_data2 = np.load(os.path.join(self.result_unaligned_dir, f"chunk_{chunk_idx+1}.npy"), allow_pickle=True).item()
             
+            # conf里保存的是什么？ 对于模型输出点云的置信度
             point_map1 = chunk_data1['world_points'][-self.overlap:]
             point_map2 = chunk_data2['world_points'][:self.overlap]
             conf1 = chunk_data1['world_points_conf'][-self.overlap:]
             conf2 = chunk_data2['world_points_conf'][:self.overlap]
 
+            # 只使用最小均值的0.1倍
             conf_threshold = min(np.median(conf1), np.median(conf2)) * 0.1
 
             scale_factor = None
@@ -381,6 +404,7 @@ class VGGT_Long:
                 print(f'[Depth Scale Precompute] scale: {scale_factor_return}, quality_score: {quality_score}, method_used: {method_used}')
                 scale_factor = scale_factor_return
 
+            # 对准点云地图
             s, R, t = weighted_align_point_maps(point_map1, 
                                                 conf1, 
                                                 point_map2, 
@@ -604,7 +628,10 @@ class VGGT_Long:
         
         print('Done.')
 
-    
+    """
+    Todo hfx: 
+    VGGT-long的主程序，感觉似乎主要还是在process_long_sequence函数中运行阿
+    """
     def run(self):
         print(f"Loading images from {self.img_dir}...")
         self.img_list = sorted(glob.glob(os.path.join(self.img_dir, "*.jpg")) + 

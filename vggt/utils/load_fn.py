@@ -93,7 +93,10 @@ def load_and_preprocess_images_square(image_path_list, target_size=1024):
 
     return images, original_coords
 
-
+"""
+Todo hfx:
+加载和预处理image数据
+"""
 def load_and_preprocess_images(image_path_list, mode="crop"):
     """
     A quick start function to load and preprocess images for model input.
@@ -140,6 +143,7 @@ def load_and_preprocess_images(image_path_list, mode="crop"):
         img = Image.open(image_path)
 
         # If there's an alpha channel, blend onto white background:
+        # 将透明背景的图片背景改为白色
         if img.mode == "RGBA":
             # Create white background
             background = Image.new("RGBA", img.size, (255, 255, 255, 255))
@@ -202,6 +206,7 @@ def load_and_preprocess_images(image_path_list, mode="crop"):
         max_width = max(shape[1] for shape in shapes)
 
         # Pad images if necessary
+        # 统一image的尺寸
         padded_images = []
         for img in images:
             h_padding = max_height - img.shape[1]
@@ -212,7 +217,7 @@ def load_and_preprocess_images(image_path_list, mode="crop"):
                 pad_bottom = h_padding - pad_top
                 pad_left = w_padding // 2
                 pad_right = w_padding - pad_left
-
+                # 应该是填充白边 以最大尺寸为基准
                 img = torch.nn.functional.pad(
                     img, (pad_left, pad_right, pad_top, pad_bottom), mode="constant", value=1.0
                 )

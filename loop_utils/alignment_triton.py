@@ -320,7 +320,9 @@ def weighted_estimate_sim3_numba_triton(source_points, target_points, weights, a
         t = mu_tgt - s * R @ mu_src
     
     return s, R, t.astype(np.float32)
-
+"""
+把处理过的点云传入进行对准
+"""
 def robust_weighted_estimate_sim3_triton(src, tgt, init_weights, delta=0.1, max_iters=20, tol=1e-9, align_method='sim3'):
 
     src = src.astype(np.float32)

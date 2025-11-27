@@ -1101,6 +1101,11 @@ from loop_utils.alignment_torch import robust_weighted_estimate_sim3_torch
 
 def weighted_align_point_maps(point_map1, conf1, point_map2, conf2, conf_threshold, config, precompute_scale = None):
     """ point_map2 -> point_map1"""
+
+    """
+    point_map1 ：
+    """
+
     b1, _, _, _ = point_map1.shape
     b2, _, _, _ = point_map2.shape
     b = min(b1, b2)
@@ -1112,6 +1117,7 @@ def weighted_align_point_maps(point_map1, conf1, point_map2, conf2, conf_thresho
     aligned_points2 = []
     confidence_weights = []
 
+    # 去除置信度底的点云
     for i in range(b):
         mask1 = conf1[i] > conf_threshold
         mask2 = conf2[i] > conf_threshold

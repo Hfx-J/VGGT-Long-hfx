@@ -22,6 +22,9 @@ Model:
   # If reference_frame_mid == True, use the middle frame within the chunk as the 
   # reference frame to alleviate the scale drift when loop closure is not available.
   # Disable it for now cuz i found some bugs related to this feature [by deng on 09 Oct].
+  # 如果 reference_frame_mid 为 True，则使用块内的中间帧作为 
+  # 当回环闭合不可用时，用于缓解尺度漂移的参考帧。
+  # 目前先禁用它，因为我发现了一些与此功能相关的错误 [邓于10月9日发现]。
   
   Sparse_Align:
     keypoint_select: 'orb' # choose among 'orb', 'fast' or 'disk'
