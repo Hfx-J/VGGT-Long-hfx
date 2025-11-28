@@ -332,7 +332,7 @@ class VGGT_Long:
             self.chunk_indices = [(0, len(self.img_list))]
         else:
             step = self.chunk_size - self.overlap #更新step只需要往后更新一半就可，保留重叠部分
-            num_chunks = (len(self.img_list) - self.overlap + step - 1) # 计算分块数量
+            num_chunks = (len(self.img_list) - self.overlap + step - 1) // step # 计算分块数量
             self.chunk_indices = []
             for i in range(num_chunks): # 把不同分块索引加入列表
                 start_idx = i * step
