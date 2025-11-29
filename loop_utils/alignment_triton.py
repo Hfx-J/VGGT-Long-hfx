@@ -21,7 +21,7 @@ def apply_transformation_residual_kernel(
     offsets = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
     mask = offsets < n_points
     
-
+    # 获取点坐标
     src_x = tl.load(src_ptr + offsets * 3 + 0, mask=mask)
     src_y = tl.load(src_ptr + offsets * 3 + 1, mask=mask)
     src_z = tl.load(src_ptr + offsets * 3 + 2, mask=mask)
@@ -31,10 +31,12 @@ def apply_transformation_residual_kernel(
     tgt_z = tl.load(tgt_ptr + offsets * 3 + 2, mask=mask)
     
     # transformed = s * (R @ p) + t
+    # 转换后的点云
     transformed_x = s * (R00*src_x + R01*src_y + R02*src_z) + t0
     transformed_y = s * (R10*src_x + R11*src_y + R12*src_z) + t1
     transformed_z = s * (R20*src_x + R21*src_y + R22*src_z) + t2
     
+    # 疑问：为什么要把点云又存进去？
     tl.store(transformed_ptr + offsets * 3 + 0, transformed_x, mask=mask)
     tl.store(transformed_ptr + offsets * 3 + 1, transformed_y, mask=mask)
     tl.store(transformed_ptr + offsets * 3 + 2, transformed_z, mask=mask)
@@ -42,9 +44,11 @@ def apply_transformation_residual_kernel(
     dx = tgt_x - transformed_x
     dy = tgt_y - transformed_y
     dz = tgt_z - transformed_z
+    #残差也就是欧式距离
     residual = tl.sqrt(dx*dx + dy*dy + dz*dz)
     tl.store(residuals_ptr + offsets, residual, mask=mask)
 
+# 加权交叉协方差矩阵 H
 @triton.jit
 def weighted_covariance_kernel(
     src_ptr, # [n, 3]
@@ -60,7 +64,7 @@ def weighted_covariance_kernel(
     offsets = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
     mask = offsets < n_points
     
-    
+    # 加载原点坐标
     w = tl.load(weights_ptr + offsets, mask=mask)
     src_x = tl.load(src_ptr + offsets * 3 + 0, mask=mask)
     src_y = tl.load(src_ptr + offsets * 3 + 1, mask=mask)
@@ -70,6 +74,7 @@ def weighted_covariance_kernel(
     tgt_z = tl.load(tgt_ptr + offsets * 3 + 2, mask=mask)
     
     
+    # 中心化坐标
     src_centered_x = src_x - mu_src0
     src_centered_y = src_y - mu_src1
     src_centered_z = src_z - mu_src2
@@ -78,7 +83,7 @@ def weighted_covariance_kernel(
     tgt_centered_y = tgt_y - mu_tgt1
     tgt_centered_z = tgt_z - mu_tgt2
     
-
+     # 使用 √w 技巧：(√w · s̃)(√w · t̃) = w · s̃ · t̃
     sqrt_w = tl.sqrt(w)
     weighted_src_x = src_centered_x * sqrt_w
     weighted_src_y = src_centered_y * sqrt_w
@@ -113,6 +118,7 @@ def weighted_covariance_kernel(
     tl.atomic_add(H_ptr + 7, tl.sum(h21, axis=0))
     tl.atomic_add(H_ptr + 8, tl.sum(h22, axis=0))
 
+# Huber损失计算
 @triton.jit
 def compute_huber_weights_kernel(
     residuals_ptr,
@@ -125,13 +131,19 @@ def compute_huber_weights_kernel(
     offsets = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
     mask = offsets < n_points
     
+    # 加载残差
     r = tl.load(residuals_ptr + offsets, mask=mask)
     
+    # 抑制离群点
     weight = tl.where(r > delta, delta / r, 1.0)
     
     tl.store(weights_ptr + offsets, weight, mask=mask)
 
-@triton.jit
+
+"""
+有些类似于C++中的TBB并行方法
+"""
+@triton.jit # JIT 编译装饰器，将 Python 代码编译为 GPU 机器码
 def weighted_mean_kernel(
     points_ptr, # [n, 3]
     weights_ptr, # [n]
@@ -157,7 +169,9 @@ def weighted_mean_kernel(
     tl.atomic_add(mean_ptr + 2, tl.sum(wz, axis=0))
     tl.atomic_add(mean_ptr + 3, tl.sum(w, axis=0))
 
-
+"""
+Todo hfx:用于计算sim3变换后的点云残差？
+"""
 def apply_transformation_residual_triton(src, tgt, s, R, t):
     n_points = src.shape[0]
     
@@ -183,16 +197,21 @@ def apply_transformation_residual_triton(src, tgt, s, R, t):
     )
     
     return transformed, residuals
-
+"""
+Todo hfx:
+好奇里面的这个triton是什么意思 -> 在这段代码中指的是 OpenAI Triton，一个用于编写高效 GPU 内核的编程语言和编译器。
+"""
 def compute_weighted_mean_triton(points, weights):
     n_points = points.shape[0]
     
-    # [sum(w*x), sum(w*y), sum(w*z), sum(w)]
+    # [sum(w*x), sum(w*y), sum(w*z), sum(w)] 
+    # 加全求和
     mean_buffer = torch.zeros(4, device=points.device, dtype=points.dtype)
     
     BLOCK_SIZE = 256
     grid = (triton.cdiv(n_points, BLOCK_SIZE),)
     
+    #这个是什么形式的代码？类似于TBB并发了
     weighted_mean_kernel[grid](
         points, weights, mean_buffer, n_points, BLOCK_SIZE=BLOCK_SIZE
     )
@@ -205,6 +224,10 @@ def compute_weighted_mean_triton(points, weights):
     
     return mean, total_weight
 
+"""
+Todo hfx:
+计算两者的协方差矩阵吗，用于求解旋转变换
+"""
 def compute_weighted_covariance_triton(src, tgt, weights, mu_src, mu_tgt):
     n_points = src.shape[0]
     
@@ -213,6 +236,7 @@ def compute_weighted_covariance_triton(src, tgt, weights, mu_src, mu_tgt):
     BLOCK_SIZE = 256
     grid = (triton.cdiv(n_points, BLOCK_SIZE),)
     
+    # .contiguous() 确保在内存中是连续存储的，展平为一维
     mu_src_flat = mu_src.contiguous().view(-1)
     mu_tgt_flat = mu_tgt.contiguous().view(-1)
     
@@ -224,7 +248,10 @@ def compute_weighted_covariance_triton(src, tgt, weights, mu_src, mu_tgt):
     )
     
     return H.reshape(3, 3)
-
+"""
+Todo hfx:
+用于计算Huber
+"""
 def compute_huber_weights_triton(residuals, delta):
     n_points = residuals.shape[0]
     weights = torch.empty_like(residuals)
@@ -259,7 +286,10 @@ def weighted_estimate_se3_triton(source_points, target_points, weights):
     )
     
     return 1.0, mu_src.cpu().numpy(), mu_tgt.cpu().numpy(), H.cpu().numpy()
-
+"""
+Todo hfx: 这才是真正的计算吗？
+weight的作用是什么?(本质上是点云的置信度)
+"""
 def weighted_estimate_sim3_triton(source_points, target_points, weights):
 
     source_points = torch.from_numpy(source_points).cuda().float()
@@ -267,28 +297,39 @@ def weighted_estimate_sim3_triton(source_points, target_points, weights):
     weights = torch.from_numpy(weights).cuda().float()
     
     total_weight = torch.sum(weights)
+    # 置信度过低则不继续计算
     if total_weight < 1e-6:
         return -1.0, np.zeros(3, dtype=np.float32), np.zeros(3, dtype=np.float32), np.zeros((3, 3), dtype=np.float32)
     
     normalized_weights = weights / total_weight
     
+    #输出的mu_xxx实际上就是除以权重的点云均值( sum(w*point)/sum(w) )
     mu_src, _ = compute_weighted_mean_triton(source_points, normalized_weights)
     mu_tgt, _ = compute_weighted_mean_triton(target_points, normalized_weights)
     
+    # 点云中心吗？ 应该是偏移之后的点云（中心化？）
     src_centered = source_points - mu_src
     tgt_centered = target_points - mu_tgt
     
+    #应该是计算两个点云的尺度大小，对于尺度处理其实可以看看Lidar-VGGT如何实现的
     scale_src = torch.sqrt(torch.sum(normalized_weights * torch.sum(src_centered**2, dim=1)))
     scale_tgt = torch.sqrt(torch.sum(normalized_weights * torch.sum(tgt_centered**2, dim=1)))
-    s = scale_tgt / scale_src
+    s = scale_tgt / scale_src #计算src->tgt的缩放因子
     
-    weighted_src = s * src_centered
+    weighted_src = s * src_centered # 将src缩放到tgt的尺度
+
+    # 加权交叉协方差矩阵 H，用于点云配准中的旋转估计。
     H = compute_weighted_covariance_triton(
         weighted_src, tgt_centered, normalized_weights, torch.zeros_like(mu_src), torch.zeros_like(mu_tgt)
     )
-    
+    # s 缩放因子
+    # mu_src mu_tgt 中心化点云
+    # H 加权交叉协方差矩阵
     return s.cpu().numpy(), mu_src.cpu().numpy(), mu_tgt.cpu().numpy(), H.cpu().numpy()
 
+"""
+Todo hfx: 带权重的去计算两个点云的 sim3 变换
+"""
 def weighted_estimate_sim3_numba_triton(source_points, target_points, weights, align_method='sim3'):
 
     if align_method == 'sim3':
@@ -299,6 +340,7 @@ def weighted_estimate_sim3_numba_triton(source_points, target_points, weights, a
     if s < 0:
         raise ValueError("Total weight too small for meaningful estimation")
     
+    # 通过SVD求解旋转估计矩阵R
     H_torch = torch.from_numpy(H).cuda().float()
     U, _, Vt = torch.linalg.svd(H_torch)
     
@@ -321,7 +363,9 @@ def weighted_estimate_sim3_numba_triton(source_points, target_points, weights, a
     
     return s, R, t.astype(np.float32)
 """
+Todo hfx: 
 把处理过的点云传入进行对准
+使用 迭代重加权最小二乘法 (IRLS) 结合 Huber 损失 来鲁棒估计两组点云之间 Sim3 变换的函数。
 """
 def robust_weighted_estimate_sim3_triton(src, tgt, init_weights, delta=0.1, max_iters=20, tol=1e-9, align_method='sim3'):
 
@@ -333,6 +377,7 @@ def robust_weighted_estimate_sim3_triton(src, tgt, init_weights, delta=0.1, max_
     tgt_torch = torch.from_numpy(tgt).cuda().float()
     init_weights_torch = torch.from_numpy(init_weights).cuda().float()
     
+    # 初始变换估计（使用初始权重）
     s, R, t = weighted_estimate_sim3_numba_triton(src, tgt, init_weights, align_method=align_method)
     
     R_torch = torch.from_numpy(R).cuda().float()
@@ -342,38 +387,47 @@ def robust_weighted_estimate_sim3_triton(src, tgt, init_weights, delta=0.1, max_
     prev_error = float('inf')
     
     for iter in range(max_iters):
+        # 实际上 transformed 没有用，可以不保留
         transformed, residuals = apply_transformation_residual_triton(
             src_torch, tgt_torch, s_torch, R_torch, t_torch
         )
         
+        #计算平均残差
         mean_residual = torch.mean(residuals).cpu().numpy()
         print(f'Iter {iter}: Mean residual = {mean_residual:.6f}')
-        
+        # Huber 损失是一种结合了 MSE 和 MAE 优点的鲁棒损失函数，广泛用于回归问题和点云配准。
+        # 这只是权重计算
         huber_weights = compute_huber_weights_triton(residuals, delta)
         
+        # 初始权重 * Huber损失
         combined_weights = init_weights_torch * huber_weights
         combined_weights_sum = torch.sum(combined_weights)
         if combined_weights_sum > 1e-12:
-            combined_weights /= combined_weights_sum
+            combined_weights /= combined_weights_sum # 均值化
         else:
             combined_weights = init_weights_torch / torch.sum(init_weights_torch)
         
         combined_weights_np = combined_weights.cpu().numpy()
+        # 通过优化权重（置信度）来实现点云配准
         s_new, R_new, t_new = weighted_estimate_sim3_numba_triton(
             src, tgt, combined_weights_np, align_method=align_method
         )
         
+        # rot_angle 可以理解是角度变换，但是param_change为啥要和平移耦合在一起不分开？
         param_change = np.abs(s_new - s) + np.linalg.norm(t_new - t)
         rot_angle = np.arccos(min(1.0, max(-1.0, (np.trace(R_new @ R.T) - 1)/2)))
         
         residuals_np = residuals.cpu().numpy()
+        # 如果残差小于阈值，则
         huber_loss_values = np.where(
             residuals_np <= delta,
-            0.5 * residuals_np**2,
-            delta * (residuals_np - 0.5 * delta)
+            0.5 * residuals_np**2,  # 小残差：MSE
+            delta * (residuals_np - 0.5 * delta)  # 大残差：线性
         )
+        # 总误差吗
         current_error = np.sum(huber_loss_values * init_weights)
-        
+        # tol 容差/收敛阈值
+        # 判断是否收敛
         if (param_change < tol and rot_angle < np.radians(0.1)) or \
            (abs(prev_error - current_error) < tol * prev_error):
             print(f'Converged at iteration {iter}')
