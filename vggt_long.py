@@ -109,7 +109,7 @@ class VGGT_Long:
 
         """
         Todo hfx:
-        如果将VGGT等价换为其他的重建模型是否可以？
+        如果将VGGT等价换为其他的重建模型是否可以？ 已有Pi-long了，应该思考如何进一部优化long；；系列
         此外能否引入imu作为位姿约束？
         """
         self.model = VGGT()
@@ -366,6 +366,7 @@ class VGGT_Long:
         torch.cuda.empty_cache()
 
         print("Aligning all the chunks...")
+        # 将两两的chunk进行对准
         for chunk_idx in range(len(self.chunk_indices)-1):
 
             print(f"Aligning {chunk_idx} and {chunk_idx+1} (Total {len(self.chunk_indices)-1})")
@@ -415,7 +416,7 @@ class VGGT_Long:
             print("Estimated Scale:", s)
             print("Estimated Rotation:\n", R)
             print("Estimated Translation:", t)
-
+            # 将对准后的变换传入
             self.sim3_list.append((s, R, t))
 
 
@@ -640,7 +641,9 @@ class VGGT_Long:
         if len(self.img_list) == 0:
             raise ValueError(f"[DIR EMPTY] No images found in {self.img_dir}!")
         print(f"Found {len(self.img_list)} images")
-
+        """
+        Todo hfx:目前来看loop的优化还是有空间的
+        """
         if self.loop_enable:
             self.get_loop_pairs()
 

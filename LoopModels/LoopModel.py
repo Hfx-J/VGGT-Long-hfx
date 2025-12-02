@@ -45,6 +45,7 @@ class LoopDetector:
     
     def _input_transform(self, image_size=None):
         """Create image transformation function"""
+        # 将图片进行归一化
         MEAN=[0.485, 0.456, 0.406]; STD=[0.229, 0.224, 0.225]
         if image_size:
             return T.Compose([
@@ -58,6 +59,10 @@ class LoopDetector:
                 T.Normalize(mean=MEAN, std=STD)
             ])
     
+    """
+    Todo hfx: 
+    使用的DINOv2 + SALAD聚合，感觉类似于CNN+netvlad这种类型
+    """
     def load_model(self):
         """Load model"""
         model = VPRModel(
@@ -93,6 +98,7 @@ class LoopDetector:
         image_paths = []
         
         for ext in image_extensions:
+            #检查大小写后缀
             image_paths.extend(list(Path(self.image_dir).glob(f"*{ext}")))
             image_paths.extend(list(Path(self.image_dir).glob(f"*{ext.upper()}")))
         
@@ -107,10 +113,12 @@ class LoopDetector:
             
         if self.image_paths is None:
             self.get_image_paths()
-            
+        
+        # 一般输入模型都是使用一个Transform来统一图片大小
         transform = self._input_transform(self.image_size)
         descriptors = []
         
+        # 按批次处理
         for i in tqdm(range(0, len(self.image_paths), self.batch_size), desc="Extracting features"):
             batch_paths = self.image_paths[i:i+self.batch_size]
             batch_imgs = []
@@ -136,15 +144,18 @@ class LoopDetector:
         self.descriptors = torch.cat(descriptors)
         return self.descriptors
     
+    # 防止候选过多
     def _apply_nms_filter(self, loop_closures, nms_threshold):
         """Apply Non-Maximum Suppression (NMS) filtering to loop pairs"""
         if not loop_closures or nms_threshold <= 0:
             return loop_closures
 
+        # 按相似度排序 
         sorted_loops = sorted(loop_closures, key=lambda x: x[2], reverse=True)
         filtered_loops = []
         suppressed = set()
         
+        #找到最大帧数
         max_frame = max(max(idx1, idx2) for idx1, idx2, _ in loop_closures)
         
         for idx1, idx2, sim in sorted_loops:
@@ -170,6 +181,7 @@ class LoopDetector:
     def _ensure_decending_order(self, tuples_list):
         return [(max(a, b), min(a, b), score) for a, b, score in tuples_list]
     
+    # 回环检索 对于每一个图片来找到最近回环
     def find_loop_closures(self):
         """Find loop closures"""
         if self.descriptors is None:
@@ -238,6 +250,7 @@ class LoopDetector:
     def get_loop_list(self):
         return [(idx1, idx2) for idx1, idx2, _ in self.loop_closures]
 
+    # 运行回环主程序
     def run(self):
         """Run complete loop detection pipeline"""
         print('Loading model...')

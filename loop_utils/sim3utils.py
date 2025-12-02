@@ -118,7 +118,10 @@ def apply_sim3_direct(point_maps, s, R, t):
 
     return transformed
 
-
+"""
+Todo hfx:
+用于计算两个点云的对准误差
+"""
 def compute_alignment_error(point_map1, conf1, point_map2, conf2, conf_threshold, s, R, t):
     """
     Compute the average point alignment error (using only original inputs)
@@ -1187,7 +1190,8 @@ def weighted_align_point_maps(point_map1, conf1, point_map2, conf2, conf_thresho
     if precompute_scale is not None: # meaning we are using align method 'scale+se3'
         # we need this precompute_scale for loop align
         s = precompute_scale
-        
+
+    # 直接返回的是欧式距离
     mean_error = compute_alignment_error(
         point_map1, conf1, 
         point_map2, conf2, 
