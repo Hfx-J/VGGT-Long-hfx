@@ -38,6 +38,7 @@ import sys
 
 from loop_utils.config_utils import load_config
 
+#去除重复的回环（同一个chunk只对应一个回环）
 def remove_duplicates(data_list):
     """
         data_list: [(67, (3386, 3406), 48, (2435, 2455)), ...]
@@ -140,6 +141,7 @@ class VGGT_Long:
         """
         Todo hfx:
         可以在里面学习一下其是如何来优化整个系统的，实际上这难道不是一个后端系统吗？
+        对于目前的回环仅依靠于相似度的判断，如果出现错误回环，可能对于整个构建为毁灭性打击
         """
         self.loop_optimizer = Sim3LoopOptimizer(self.config)
 
@@ -193,6 +195,8 @@ class VGGT_Long:
     """
     Todo hfx: 
     对单一分块进行处理
+    For loop:
+    将存在回环的信息同时存入在一个回环chunk中进入VGGT处理
     """
     def process_single_chunk(self, range_1, chunk_idx=None, range_2=None, is_loop=False):
         start_idx, end_idx = range_1
@@ -422,12 +426,14 @@ class VGGT_Long:
 
         if self.loop_enable:
             for item in self.loop_predict_list:
+                # 读取回环中的内容
                 chunk_idx_a = item[0][0]
                 chunk_idx_b = item[0][2]
                 chunk_a_range = item[0][1]
                 chunk_b_range = item[0][3]
 
                 print('chunk_a align')
+                # 提取对应的回环点云和置信度
                 point_map_loop = item[1]['world_points'][:chunk_a_range[1] - chunk_a_range[0]]
                 conf_loop = item[1]['world_points_conf'][:chunk_a_range[1] - chunk_a_range[0]]
                 chunk_a_rela_begin = chunk_a_range[0] - self.chunk_indices[chunk_idx_a][0]
@@ -436,6 +442,7 @@ class VGGT_Long:
                 print(chunk_a_range)
                 print(chunk_a_rela_begin, chunk_a_rela_end)
                 
+                #加载回环部分的点云
                 if self.temp_files_location == 'cpu_memory':
                     chunk_data_a = self.temp_storage[f"chunk_{chunk_idx_a}"]
                 else:

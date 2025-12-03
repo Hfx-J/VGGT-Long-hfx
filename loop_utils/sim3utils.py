@@ -481,6 +481,7 @@ def get_frame_range(chunk, idx, half_window=10):
         end = idx + half_window
     return (start, end)
 
+# 如何处理回环信息的，难道是直接作拼接吗
 def process_loop_list(chunk_index, loop_list, half_window=10):
     """
     Process loop_list and return chunk indices and frame ranges for each (idx1, idx2) pair.
@@ -496,13 +497,14 @@ def process_loop_list(chunk_index, loop_list, half_window=10):
         try:
             chunk_idx1_0based = find_chunk_index(chunk_index, idx1)
             chunk1 = chunk_index[chunk_idx1_0based]
+            # 获取在chunk中的回环id前后half—window
             range1 = get_frame_range(chunk1, idx1, half_window)
             
             chunk_idx2_0based = find_chunk_index(chunk_index, idx2)
             chunk2 = chunk_index[chunk_idx2_0based]
             range2 = get_frame_range(chunk2, idx2, half_window)
             
-
+            # 捕获对应范围的点云
             result = (
                 chunk_idx1_0based,
                 range1,

@@ -165,7 +165,8 @@ class LoopDetector:
             filtered_loops.append((idx1, idx2, sim))
             
             suppress_range = set()
-            
+            # 抑制idx1附近：[idx1-threshold, idx2)
+            # 对于相似区域只保留相似度最大的候选
             start1 = max(0, idx1 - nms_threshold)
             end1 = min(idx1 + nms_threshold + 1, idx2) 
             suppress_range.update(range(start1, end1))
@@ -178,6 +179,7 @@ class LoopDetector:
         
         return filtered_loops
     
+    # 确保大的id在前，小的di在后
     def _ensure_decending_order(self, tuples_list):
         return [(max(a, b), min(a, b), score) for a, b, score in tuples_list]
     
