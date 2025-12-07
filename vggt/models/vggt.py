@@ -19,6 +19,7 @@ class VGGT(nn.Module, PyTorchModelHubMixin):
         super().__init__()
 
         self.aggregator = Aggregator(img_size=img_size, patch_size=patch_size, embed_dim=embed_dim)
+        # 相机参数head
         self.camera_head = CameraHead(dim_in=2 * embed_dim)
         self.point_head = DPTHead(dim_in=2 * embed_dim, output_dim=4, activation="inv_log", conf_activation="expp1")
         self.depth_head = DPTHead(dim_in=2 * embed_dim, output_dim=2, activation="exp", conf_activation="expp1")
@@ -55,11 +56,12 @@ class VGGT(nn.Module, PyTorchModelHubMixin):
             images = images.unsqueeze(0)
         if query_points is not None and len(query_points.shape) == 2:
             query_points = query_points.unsqueeze(0)
-
-        aggregated_tokens_list, patch_start_idx = self.aggregator(images)
-
+        # 特征提取部分
+        aggregated_tokens_list, patch_start_idx = self.aggregator(images) # [B x S x P x 2C]，
+        print()
         predictions = {}
 
+        # 后处理特征
         with torch.cuda.amp.autocast(enabled=False):
             if self.camera_head is not None:
                 pose_enc_list = self.camera_head(aggregated_tokens_list)

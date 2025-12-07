@@ -44,8 +44,8 @@ class CameraHead(nn.Module):
 
         self.trans_act = trans_act
         self.quat_act = quat_act
-        self.fl_act = fl_act
-        self.trunk_depth = trunk_depth
+        self.fl_act = fl_act # 视场角FoV
+        self.trunk_depth = trunk_depth #这个参数意义是？ mlp层数？
 
         # Build the trunk using a sequence of transformer blocks.
         self.trunk = nn.Sequential(
@@ -60,13 +60,16 @@ class CameraHead(nn.Module):
         self.trunk_norm = nn.LayerNorm(dim_in)
 
         # Learnable empty camera pose token.
+        # 用于学习的参数
         self.empty_pose_tokens = nn.Parameter(torch.zeros(1, 1, self.target_dim))
         self.embed_pose = nn.Linear(self.target_dim, dim_in)
 
         # Module for producing modulation parameters: shift, scale, and a gate.
+        # 用于生成调制参数（位移、缩放及闸门）的模块 激活函数？
         self.poseLN_modulation = nn.Sequential(nn.SiLU(), nn.Linear(dim_in, 3 * dim_in, bias=True))
 
         # Adaptive layer normalization without affine parameters.
+        # 自适应层归一化技术，无需使用仿射参数。
         self.adaln_norm = nn.LayerNorm(dim_in, elementwise_affine=False, eps=1e-6)
         self.pose_branch = Mlp(in_features=dim_in, hidden_features=dim_in // 2, out_features=self.target_dim, drop=0)
 
@@ -83,8 +86,8 @@ class CameraHead(nn.Module):
             list: A list of predicted camera encodings (post-activation) from each iteration.
         """
         # Use tokens from the last block for camera prediction.
-        tokens = aggregated_tokens_list[-1]
-
+        tokens = aggregated_tokens_list[-1] #直接取到最后一层特征
+        
         # Extract the camera tokens
         pose_tokens = tokens[:, :, 0]
         pose_tokens = self.token_norm(pose_tokens)

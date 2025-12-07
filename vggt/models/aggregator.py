@@ -41,12 +41,12 @@ class Aggregator(nn.Module):
         ffn_bias (bool): Whether to include bias in MLP layers.
         patch_embed (str): Type of patch embed. e.g., "conv" or "dinov2_vitl14_reg".
         aa_order (list[str]): The order of alternating attention, e.g. ["frame", "global"].
-        aa_block_size (int): How many blocks to group under each attention type before switching. If not necessary, set to 1.
+        aa_block_size (int): How many blocks to group under each attention type before switching. 在切换之前，每种注意力类型下需要划分多少个区块 If not necessary, set to 1.
         qk_norm (bool): Whether to apply QK normalization.
         rope_freq (int): Base frequency for rotary embedding. -1 to disable.
         init_values (float): Init scale for layer scale.
     """
-
+    # 实际上就是dinov2
     def __init__(
         self,
         img_size=518,
@@ -72,9 +72,12 @@ class Aggregator(nn.Module):
         self.__build_patch_embed__(patch_embed, img_size, patch_size, num_register_tokens, embed_dim=embed_dim)
 
         # Initialize rotary position embedding if frequency > 0
+        # 初始化位姿token
+        # 位置编码
         self.rope = RotaryPositionEmbedding2D(frequency=rope_freq) if rope_freq > 0 else None
         self.position_getter = PositionGetter() if self.rope is not None else None
 
+        # 帧内注意力
         self.frame_blocks = nn.ModuleList(
             [
                 block_fn(
@@ -92,6 +95,7 @@ class Aggregator(nn.Module):
             ]
         )
 
+        #全局注意力
         self.global_blocks = nn.ModuleList(
             [
                 block_fn(
@@ -122,6 +126,7 @@ class Aggregator(nn.Module):
 
         # Note: We have two camera tokens, one for the first frame and one for the rest
         # The same applies for register tokens
+        # 直接增加的可训练的参数层
         self.camera_token = nn.Parameter(torch.randn(1, 2, 1, embed_dim))
         self.register_token = nn.Parameter(torch.randn(1, 2, num_register_tokens, embed_dim))
 
@@ -135,7 +140,10 @@ class Aggregator(nn.Module):
         # Register normalization constants as buffers
         for name, value in (("_resnet_mean", _RESNET_MEAN), ("_resnet_std", _RESNET_STD)):
             self.register_buffer(name, torch.FloatTensor(value).view(1, 1, 3, 1, 1), persistent=False)
-
+    """
+    Todo hfx:
+    处理图像patch
+    """
     def __build_patch_embed__(
         self,
         patch_embed,
@@ -162,7 +170,7 @@ class Aggregator(nn.Module):
                 "dinov2_vits14_reg": vit_small,
                 "dinov2_vitg2_reg": vit_giant2,
             }
-
+            # 采用dinov2
             self.patch_embed = vit_models[patch_embed](
                 img_size=img_size,
                 patch_size=patch_size,
@@ -194,9 +202,10 @@ class Aggregator(nn.Module):
             raise ValueError(f"Expected 3 input channels, got {C_in}")
 
         # Normalize images and reshape for patch embed
-        images = (images - self._resnet_mean) / self._resnet_std
+        images = (images - self._resnet_mean) / self._resnet_std # 图像归一化
 
         # Reshape to [B*S, C, H, W] for patch embedding
+        # 现在图片转token都是直接用dinov2了吗
         images = images.view(B * S, C_in, H, W)
         patch_tokens = self.patch_embed(images)
 
@@ -205,11 +214,36 @@ class Aggregator(nn.Module):
 
         _, P, C = patch_tokens.shape
 
-        # Expand camera and register tokens to match batch size and sequence length
+        # ============================================================
+        # 扩展特殊token以匹配批次大小和序列长度
+        # ============================================================
+        
+        # 扩展相机token: (1, 2, X_cam, C) -> (B*S, X_cam, C)
+        # 作用: 编码相机参数（如内参、外参、视角等）
+        # - 第一帧使用专用的相机token（索引0）
+        # - 后续帧共享另一个相机token（索引1）
         camera_token = slice_expand_and_flatten(self.camera_token, B, S)
+        
+        # 扩展注册token: (1, 2, X_reg, C) -> (B*S, X_reg, C)
+        # 作用: 类似于ViT的[CLS] token，用于全局信息聚合
+        # - 提供可学习的"寄存器"空间，帮助模型存储全局特征
+        # - 缓解注意力机制中的"token过度利用"问题
         register_token = slice_expand_and_flatten(self.register_token, B, S)
 
-        # Concatenate special tokens with patch tokens
+        # ============================================================
+        # 拼接所有token形成完整的输入序列
+        # ============================================================
+        
+        # 在特征维度（dim=1）上拼接：
+        # [camera_token | register_token | patch_tokens]
+        #  相机参数token | 注册token        | 图像patch token
+        #  (X_cam个)    | (X_reg个)       | (H*W个)
+        # 
+        # 最终形状: (B*S, X_cam + X_reg + H*W, C)
+        # 其中: 
+        #   B*S: 总帧数（批次大小 × 每个样本的帧数）
+        #   X_cam + X_reg + H*W: 每帧的总token数
+        #   C: 特征维度（通道数）
         tokens = torch.cat([camera_token, register_token, patch_tokens], dim=1)
 
         pos = None
@@ -230,7 +264,10 @@ class Aggregator(nn.Module):
         global_idx = 0
         output_list = []
 
-        for _ in range(self.aa_block_num):
+        for _ in range(self.aa_block_num): #分块划分的意义是什么？
+
+            # 进行交替注意力机制
+            # 其输入
             for attn_type in self.aa_order:
                 if attn_type == "frame":
                     tokens, frame_idx, frame_intermediates = self._process_frame_attention(
@@ -244,7 +281,7 @@ class Aggregator(nn.Module):
                     raise ValueError(f"Unknown attention type: {attn_type}")
 
             for i in range(len(frame_intermediates)):
-                # concat frame and global intermediates, [B x S x P x 2C]
+                # concat frame and global intermediates, [B x S x P x 2C] 把帧内和全局合并 为一个一维token
                 concat_inter = torch.cat([frame_intermediates[i], global_intermediates[i]], dim=-1)
                 output_list.append(concat_inter)
 
@@ -252,7 +289,9 @@ class Aggregator(nn.Module):
         del frame_intermediates
         del global_intermediates
         return output_list, self.patch_start_idx
-
+    """
+    帧间自注意力机制
+    """
     def _process_frame_attention(self, tokens, B, S, P, C, frame_idx, pos=None):
         """
         Process frame attention blocks. We keep tokens in shape (B*S, P, C).
@@ -260,6 +299,7 @@ class Aggregator(nn.Module):
         # If needed, reshape tokens or positions:
         if tokens.shape != (B * S, P, C):
             tokens = tokens.view(B, S, P, C).view(B * S, P, C)
+            # 含义：将 B 个样本的 S 个frames 展平成 B*S 个独立单元
 
         if pos is not None and pos.shape != (B * S, P, 2):
             pos = pos.view(B, S, P, 2).view(B * S, P, 2)
@@ -280,6 +320,7 @@ class Aggregator(nn.Module):
         """
         if tokens.shape != (B, S * P, C):
             tokens = tokens.view(B, S, P, C).view(B, S * P, C)
+            # 含义：每个样本内的所有 frames 的所有 patches 连接成一个长序列
 
         if pos is not None and pos.shape != (B, S * P, 2):
             pos = pos.view(B, S, P, 2).view(B, S * P, 2)
@@ -294,28 +335,45 @@ class Aggregator(nn.Module):
 
         return tokens, global_idx, intermediates
 
-
+# 用于区分第一个帧，因为VGGT是基于第一帧坐标系重建的。
+# 不过token_tensor又是什么呢？
 def slice_expand_and_flatten(token_tensor, B, S):
     """
-    Processes specialized tokens with shape (1, 2, X, C) for multi-frame processing:
-    1) Uses the first position (index=0) for the first frame only
-    2) Uses the second position (index=1) for all remaining frames (S-1 frames)
-    3) Expands both to match batch size B
-    4) Concatenates to form (B, S, X, C) where each sequence has 1 first-position token
-       followed by (S-1) second-position tokens
-    5) Flattens to (B*S, X, C) for processing
-
-    Returns:
-        torch.Tensor: Processed tokens with shape (B*S, X, C)
+    处理用于多帧处理的特殊token，输入形状为 (1, 2, X, C)：
+    1) 使用第一个位置（索引0）的token仅用于第一帧
+    2) 使用第二个位置（索引1）的token用于所有剩余帧（S-1帧）
+    3) 将两者都扩展以匹配批次大小B
+    4) 拼接形成 (B, S, X, C)，其中每个序列有1个首帧token，后跟(S-1)个其他帧token
+    5) 展平为 (B*S, X, C) 以便处理
+    
+    参数:
+        token_tensor: 输入tensor，形状 (1, 2, X, C)
+        B: 批次大小 (Batch size)
+        S: 序列长度/帧数 (Sequence length)
+    
+    返回:
+        torch.Tensor: 处理后的token，形状 (B*S, X, C)
     """
 
-    # Slice out the "query" tokens => shape (1, 1, ...)
+    # 步骤1: 切片出"查询"token（第一个位置） => 形状 (1, 1, X, C)
+    # 这些token专门用于序列的第一帧
     query = token_tensor[:, 0:1, ...].expand(B, 1, *token_tensor.shape[2:])
-    # Slice out the "other" tokens => shape (1, S-1, ...)
+    # 扩展后形状: (B, 1, X, C) - B个样本，每个样本1帧
+    
+    # 步骤2: 切片出"其他"token（第二个位置） => 形状 (1, 1, X, C)
+    # 注意：token_tensor[:,1:,...] 实际上只取了索引1，因为输入维度1只有2个元素
+    # 这些token将被用于所有后续帧
     others = token_tensor[:, 1:, ...].expand(B, S - 1, *token_tensor.shape[2:])
-    # Concatenate => shape (B, S, ...)
+    # 扩展后形状: (B, S-1, X, C) - B个样本，每个样本S-1帧
+    
+    # 步骤3: 在时间维度（dim=1）上拼接 => 形状 (B, S, X, C)
+    # 结果: 每个样本的序列为 [query_token, other_token, other_token, ..., other_token]
+    #                          第1帧          第2帧         第3帧              第S帧
     combined = torch.cat([query, others], dim=1)
-
-    # Finally flatten => shape (B*S, ...)
+    
+    # 步骤4: 将批次和时间维度展平 => 形状 (B*S, X, C)
+    # 这样可以将所有帧作为独立样本进行批处理
+    # 例如: (2, 3, X, C) -> (6, X, C)
     combined = combined.view(B * S, *combined.shape[2:])
+    
     return combined
