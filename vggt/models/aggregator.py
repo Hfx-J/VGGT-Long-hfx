@@ -71,6 +71,8 @@ class Aggregator(nn.Module):
 
         self.__build_patch_embed__(patch_embed, img_size, patch_size, num_register_tokens, embed_dim=embed_dim)
 
+
+
         # Initialize rotary position embedding if frequency > 0
         # 初始化位姿token
         # 位置编码
@@ -208,7 +210,8 @@ class Aggregator(nn.Module):
         # 现在图片转token都是直接用dinov2了吗
         images = images.view(B * S, C_in, H, W)
         patch_tokens = self.patch_embed(images)
-
+        print("images shape:",images.shape)
+        print("patch_tokens shape:",patch_tokens.shape)
         if isinstance(patch_tokens, dict):
             patch_tokens = patch_tokens["x_norm_patchtokens"]
 
