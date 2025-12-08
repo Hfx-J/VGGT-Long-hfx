@@ -46,9 +46,9 @@ class Block(nn.Module):
         rope=None,
     ) -> None:
         super().__init__()
-
+        # 规范化层
         self.norm1 = norm_layer(dim)
-
+        # 注意力模块
         self.attn = attn_class(
             dim,
             num_heads=num_heads,
@@ -61,6 +61,7 @@ class Block(nn.Module):
             rope=rope,
         )
 
+        # 线性层
         self.ls1 = LayerScale(dim, init_values=init_values) if init_values else nn.Identity()
         self.drop_path1 = DropPath(drop_path) if drop_path > 0.0 else nn.Identity()
 

@@ -211,7 +211,7 @@ class Aggregator(nn.Module):
         images = images.view(B * S, C_in, H, W)
         patch_tokens = self.patch_embed(images)
         print("images shape:",images.shape)
-        print("patch_tokens shape:",patch_tokens.shape)
+        print("patch_tokens shape:",patch_tokens["x_norm_patchtokens"].shape)
         if isinstance(patch_tokens, dict):
             patch_tokens = patch_tokens["x_norm_patchtokens"]
 
@@ -248,7 +248,9 @@ class Aggregator(nn.Module):
         #   X_cam + X_reg + H*W: 每帧的总token数
         #   C: 特征维度（通道数）
         tokens = torch.cat([camera_token, register_token, patch_tokens], dim=1)
-
+        print("camera_token shape:",camera_token.shape)
+        print("register_token shape:",register_token.shape)
+        print("tokens shape:",tokens.shape)
         pos = None
         if self.rope is not None:
             pos = self.position_getter(B * S, H // self.patch_size, W // self.patch_size, device=images.device)

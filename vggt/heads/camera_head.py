@@ -48,6 +48,7 @@ class CameraHead(nn.Module):
         self.trunk_depth = trunk_depth #这个参数意义是？ mlp层数？
 
         # Build the trunk using a sequence of transformer blocks.
+        # 4层 
         self.trunk = nn.Sequential(
             *[
                 Block(dim=dim_in, num_heads=num_heads, mlp_ratio=mlp_ratio, init_values=init_values)
