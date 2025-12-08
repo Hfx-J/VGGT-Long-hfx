@@ -52,7 +52,7 @@ class Aggregator(nn.Module):
         img_size=518,
         patch_size=14,
         embed_dim=1024,
-        depth=24,
+        depth=24, # transformer层数
         num_heads=16,
         mlp_ratio=4.0,
         num_register_tokens=4,
@@ -268,8 +268,8 @@ class Aggregator(nn.Module):
         frame_idx = 0
         global_idx = 0
         output_list = []
-
-        for _ in range(self.aa_block_num): #分块划分的意义是什么？
+        print(f"[Aggregator] aa_block_num:{self.aa_block_num} aa_block_size:{self.aa_block_size}")
+        for idx in range(self.aa_block_num): #分块划分的意义是什么？
 
             # 进行交替注意力机制
             # 其输入
@@ -285,10 +285,11 @@ class Aggregator(nn.Module):
                 else:
                     raise ValueError(f"Unknown attention type: {attn_type}")
 
-            for i in range(len(frame_intermediates)):
-                # concat frame and global intermediates, [B x S x P x 2C] 把帧内和全局合并 为一个一维token
-                concat_inter = torch.cat([frame_intermediates[i], global_intermediates[i]], dim=-1)
-                output_list.append(concat_inter)
+            if(idx in [4, 11, 17, 23]) or 0 :
+                for i in range(len(frame_intermediates)):
+                    # concat frame and global intermediates, [B x S x P x 2C] 把帧内和全局合并 为一个一维token
+                    concat_inter = torch.cat([frame_intermediates[i], global_intermediates[i]], dim=-1)
+                    output_list.append(concat_inter)
 
         del concat_inter
         del frame_intermediates

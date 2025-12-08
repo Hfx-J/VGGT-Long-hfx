@@ -93,7 +93,7 @@ class CameraHead(nn.Module):
         # Use tokens from the last block for camera prediction.
         tokens = aggregated_tokens_list[-1] #直接取到最后一层特征
         
-        # Extract the camera tokens
+        # Extract the camera tokens 最后一部分是相机 tokens
         pose_tokens = tokens[:, :, 0]
         print(f"[Camera Head] input pose_tokens:{pose_tokens.shape}")
         pose_tokens = self.token_norm(pose_tokens)

@@ -57,8 +57,9 @@ class VGGT(nn.Module, PyTorchModelHubMixin):
         if query_points is not None and len(query_points.shape) == 2:
             query_points = query_points.unsqueeze(0)
         # 特征提取部分
+        # 实际上 aggregated_tokens_list 保存了24层特征 24层transformer层输出
         aggregated_tokens_list, patch_start_idx = self.aggregator(images) # [B x S x P x 2C]，
-        print()
+        print(f"[VGGT] aggregated_tokens_list length:{len(aggregated_tokens_list)} shape:{aggregated_tokens_list[2].shape}")
         predictions = {}
 
         # 后处理特征
@@ -66,6 +67,7 @@ class VGGT(nn.Module, PyTorchModelHubMixin):
             if self.camera_head is not None:
                 pose_enc_list = self.camera_head(aggregated_tokens_list)
                 predictions["pose_enc"] = pose_enc_list[-1]  # pose encoding of the last iteration
+                print(f"[VGGT] pose_enc shape: {predictions['pose_enc'].shape}")
 
             if self.depth_head is not None:
                 depth, depth_conf = self.depth_head(
