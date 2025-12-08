@@ -38,6 +38,25 @@ class DPTHead(nn.Module):
         pos_embed (bool, optional): Whether to use positional embedding. Default is True.
         feature_only (bool, optional): If True, return features only without the last several layers and activation head. Default is False.
         down_ratio (int, optional): Downscaling factor for the output resolution. Default is 1.
+
+    中文说明：
+    DPT 头，用于密集预测任务。
+
+    该实现遵循论文 "Vision Transformers for Dense Prediction"（https://arxiv.org/abs/2103.13413）中描述的架构。
+    DPT 头处理来自视觉 Transformer 骨干网的特征，并通过融合多尺度特征生成密集预测。
+
+    参数：
+        dim_in (int)：输入维度（通道数）。
+        patch_size (int, optional)：patch 大小，默认 14。
+        output_dim (int, optional)：输出通道数，默认 4。
+        activation (str, optional)：预测输出使用的激活类型，默认 "inv_log"。
+        conf_activation (str, optional)：置信度分支使用的激活类型，默认 "expp1"。
+        features (int, optional)：中间表示的特征通道数，默认 256。
+        out_channels (List[int], optional)：用于每个中间层的输出通道列表。
+        intermediate_layer_idx (List[int], optional)：从聚合 tokens 中用于 DPT 的层索引列表。
+        pos_embed (bool, optional)：是否使用位置嵌入，默认 True。
+        feature_only (bool, optional)：若为 True，仅返回特征（不经过最终卷积与激活头），默认 False。
+        down_ratio (int, optional)：输出分辨率的下采样因子，默认 1。
     """
 
     def __init__(
@@ -66,26 +85,29 @@ class DPTHead(nn.Module):
         self.norm = nn.LayerNorm(dim_in)
 
         # Projection layers for each output channel from tokens.
+        # 4层卷积
         self.projects = nn.ModuleList(
             [nn.Conv2d(in_channels=dim_in, out_channels=oc, kernel_size=1, stride=1, padding=0) for oc in out_channels]
         )
 
         # Resize layers for upsampling feature maps.
+        # 对特征图进行降采样
         self.resize_layers = nn.ModuleList(
             [
-                nn.ConvTranspose2d(
+                nn.ConvTranspose2d( # 上采样 - 增大特征图尺寸 256->256
                     in_channels=out_channels[0], out_channels=out_channels[0], kernel_size=4, stride=4, padding=0
                 ),
-                nn.ConvTranspose2d(
+                nn.ConvTranspose2d( # 512-> 512
                     in_channels=out_channels[1], out_channels=out_channels[1], kernel_size=2, stride=2, padding=0
                 ),
-                nn.Identity(),
-                nn.Conv2d(
+                nn.Identity(), 
+                nn.Conv2d( # 下采样 - 减小特征图尺寸 1024->1024
                     in_channels=out_channels[3], out_channels=out_channels[3], kernel_size=3, stride=2, padding=1
                 ),
             ]
         )
 
+        # 作为最后decoder的部分
         self.scratch = _make_scratch(out_channels, features, expand=False)
 
         # Attach additional modules to scratch.
@@ -114,8 +136,8 @@ class DPTHead(nn.Module):
 
     def forward(
         self,
-        aggregated_tokens_list: List[torch.Tensor],
-        images: torch.Tensor,
+        aggregated_tokens_list: List[torch.Tensor], # dinov2 特征层
+        images: torch.Tensor,# 原始图片
         patch_start_idx: int,
         frames_chunk_size: int = 8,
     ) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
@@ -125,18 +147,34 @@ class DPTHead(nn.Module):
             aggregated_tokens_list (List[Tensor]): List of token tensors from different transformer layers.
             images (Tensor): Input images with shape [B, S, 3, H, W], in range [0, 1].
             patch_start_idx (int): Starting index for patch tokens in the token sequence.
-                Used to separate patch tokens from other tokens (e.g., camera or register tokens).
+            Used to separate patch tokens from other tokens (e.g., camera or register tokens).
             frames_chunk_size (int, optional): Number of frames to process in each chunk.
-                If None or larger than S, all frames are processed at once. Default: 8.
+            If None or larger than S, all frames are processed at once. Default: 8.
 
         Returns:
             Tensor or Tuple[Tensor, Tensor]:
-                - If feature_only=True: Feature maps with shape [B, S, C, H, W]
-                - Otherwise: Tuple of (predictions, confidence) both with shape [B, S, 1, H, W]
+            - If feature_only=True: Feature maps with shape [B, S, C, H, W]
+            - Otherwise: Tuple of (predictions, confidence) both with shape [B, S, 1, H, W]
+
+        中文说明：
+        支持按帧分块处理的 DPT 头前向函数。
+        参数：
+            aggregated_tokens_list (List[Tensor])：来自不同 Transformer 层的 token 张量列表。
+            images (Tensor)：输入图像，形状为 [B, S, 3, H, W]，像素值范围 [0, 1]。
+            patch_start_idx (int)：patch token 在 token 序列中的起始索引，
+            用于将 patch token 与其他 token（例如相机或注册 token）区分开。
+            frames_chunk_size (int, optional)：每次处理的帧数。
+            若为 None 或大于 S，则一次处理所有帧。默认：8。
+
+        返回：
+            Tensor 或 Tuple[Tensor, Tensor]：
+            - 若 feature_only=True：返回特征图，形状为 [B, S, C, H, W]
+            - 否则：返回 (predictions, confidence) 二元组，均为形状 [B, S, 1, H, W]
         """
         B, S, _, H, W = images.shape
 
         # If frames_chunk_size is not specified or greater than S, process all frames at once
+        # 如果未指定或 frame_chunk_size 大于 S，则一次性处理所有帧
         if frames_chunk_size is None or frames_chunk_size >= S:
             return self._forward_impl(aggregated_tokens_list, images, patch_start_idx)
 
@@ -179,6 +217,7 @@ class DPTHead(nn.Module):
     ) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
         """
         Implementation of the forward pass through the DPT head.
+        增量式处理
 
         This method processes a specific chunk of frames from the sequence.
 
@@ -202,9 +241,9 @@ class DPTHead(nn.Module):
         out = []
         dpt_idx = 0
 
-        for layer_idx in self.intermediate_layer_idx:
-            x = aggregated_tokens_list[layer_idx][:, :, patch_start_idx:]
-
+        for layer_idx in self.intermediate_layer_idx: #实际上就是上面使用的 [1, 60, 412, 2048]
+            x = aggregated_tokens_list[layer_idx][:, :, patch_start_idx:] # 
+            print(f"[DPT Head] x:{x.shape} frames_start_idx:{frames_start_idx} frames_end_idx:{frames_end_idx}")
             # Select frames if processing a chunk
             if frames_start_idx is not None and frames_end_idx is not None:
                 x = x[:, frames_start_idx:frames_end_idx]
