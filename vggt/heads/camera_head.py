@@ -45,10 +45,10 @@ class CameraHead(nn.Module):
         self.trans_act = trans_act
         self.quat_act = quat_act
         self.fl_act = fl_act # 视场角FoV
-        self.trunk_depth = trunk_depth #这个参数意义是？ mlp层数？
+        self.trunk_depth = trunk_depth #这个参数意义是？ 4层transformer层数？
 
         # Build the trunk using a sequence of transformer blocks.
-        # 4层 
+        # 4层transformer
         self.trunk = nn.Sequential(
             *[
                 Block(dim=dim_in, num_heads=num_heads, mlp_ratio=mlp_ratio, init_values=init_values)
@@ -57,6 +57,7 @@ class CameraHead(nn.Module):
         )
 
         # Normalizations for camera token and trunk output.
+        # 
         self.token_norm = nn.LayerNorm(dim_in)
         self.trunk_norm = nn.LayerNorm(dim_in)
 
@@ -67,7 +68,10 @@ class CameraHead(nn.Module):
 
         # Module for producing modulation parameters: shift, scale, and a gate.
         # 用于生成调制参数（位移、缩放及闸门）的模块 激活函数？
-        self.poseLN_modulation = nn.Sequential(nn.SiLU(), nn.Linear(dim_in, 3 * dim_in, bias=True))
+        self.poseLN_modulation = nn.Sequential(
+                                                    nn.SiLU(),                           # 激活函数
+                                                    nn.Linear(dim_in, 3 * dim_in, bias=True)  # 线性层: 2048 → 6144
+                                                )
 
         # Adaptive layer normalization without affine parameters.
         # 自适应层归一化技术，无需使用仿射参数。
@@ -91,7 +95,9 @@ class CameraHead(nn.Module):
         
         # Extract the camera tokens
         pose_tokens = tokens[:, :, 0]
+        print(f"[Camera Head] input pose_tokens:{pose_tokens.shape}")
         pose_tokens = self.token_norm(pose_tokens)
+        print(f"[Camera Head] token_norm pose_tokens:{pose_tokens.shape}")
 
         pred_pose_enc_list = self.trunk_fn(pose_tokens, num_iterations)
         return pred_pose_enc_list
@@ -99,7 +105,7 @@ class CameraHead(nn.Module):
     def trunk_fn(self, pose_tokens: torch.Tensor, num_iterations: int) -> list:
         """
         Iteratively refine camera pose predictions.
-
+        迭代预测 相机位姿
         Args:
             pose_tokens (torch.Tensor): Normalized camera tokens with shape [B, 1, C].
             num_iterations (int): Number of refinement iterations.
@@ -113,14 +119,22 @@ class CameraHead(nn.Module):
 
         for _ in range(num_iterations):
             # Use a learned empty pose for the first iteration.
+            # 第一次进入使用可学习的空位姿
             if pred_pose_enc is None:
                 module_input = self.embed_pose(self.empty_pose_tokens.expand(B, S, -1))
             else:
                 # Detach the previous prediction to avoid backprop through time.
+                # 分离先前的预测，以避免时间反向传播。
                 pred_pose_enc = pred_pose_enc.detach()
                 module_input = self.embed_pose(pred_pose_enc)
 
-            # Generate modulation parameters and split them into shift, scale, and gate components.
+            # Generate modulation parameters and split them into shift, scale, and gate components （作用究竟是什么？）.
+            # 生成调制参数并将其分解为移位、缩放和门控组件。 自适应
+            """
+            shift_msa：用于对 LayerNorm 之后做偏移（additive bias）。
+            scale_msa：用于对 LayerNorm 做缩放（multiplicative scale），通常是对 normalized activation 的放大/缩小。
+            gate_msa：一个门控信号，用来按通道或位置控制 MSA（multi‑head self‑attention）分支的激活强度（通常通过 sigmoid 或者直接相乘实现）。
+            """
             shift_msa, scale_msa, gate_msa = self.poseLN_modulation(module_input).chunk(3, dim=-1)
 
             # Adaptive layer normalization and modulation.
